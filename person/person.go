@@ -2,6 +2,7 @@ package person
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"mux_test/db"
 )
@@ -12,7 +13,11 @@ type Person struct {
 	Age  int    `json:"age"`
 }
 
-func AddPerson(p Person) error {
+var redisDbConn db.RedisDbConn = db.RedisDbConn{
+	RedisClient: db.GetRedisConn(),
+}
+
+func AddPerson(p Person) (int64, error) {
 	sqlCon, err := db.NewSqlConn("mysql")
 	if err != nil {
 		fmt.Printf("Error while creating new mysql connection: %v", err)
@@ -26,7 +31,16 @@ func AddPerson(p Person) error {
 	}
 	rowNos, err := res.RowsAffected()
 	fmt.Printf("No of rows inserted: %d\n", rowNos)
-	return err
+	if err == nil {
+		lI, _ := res.LastInsertId()
+		redisId := "id" + fmt.Sprint(lI)
+		err = redisDbConn.SetEntry(redisId, p, 10)
+		if err != nil {
+			fmt.Printf("Error occured while adding person details in the redis: %v", err)
+		}
+	}
+	lastId, _ := res.LastInsertId()
+	return lastId, err
 }
 
 func GetPersons() []Person {
@@ -50,8 +64,17 @@ func GetPersons() []Person {
 }
 
 func GetPerson(id int) (Person, error) {
-	sqlConn, err := db.NewSqlConn("mysql")
 	var p Person
+	redRec, err := redisDbConn.GetEntry("id" + fmt.Sprint(id))
+	if err != nil {
+		fmt.Printf("Error while fetching person (id = %d) records from redis.\nError:%v", id, err)
+	} else if redRec != "" {
+		fmt.Println("redRec" + redRec)
+		json.Unmarshal([]byte(redRec), &p)
+		return p, nil
+	}
+	sqlConn, err := db.NewSqlConn("mysql")
+
 	if err != nil {
 		fmt.Printf("Error while creating new mysql connection")
 		return p, err
